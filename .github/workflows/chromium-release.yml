@@ -1,20 +1,13 @@
 name: Publish Chromium Snapshot APK
 
 permissions:
-  contents: write  # 這行是關鍵：允許建立/更新 release 與 tag
+  contents: write  # 需要寫入 releases/tags
 
 on:
   schedule:
-    - cron: "0 6 * * *" # 每天 06:00 UTC
+    - cron: "0 6 * * *" # 每天 06:00 UTC（澳洲墨爾本為 17:00/16:00 視夏令時間）
   workflow_dispatch:
     inputs:
-      architecture:
-        description: "Chromium snapshot architecture to download"
-        type: choice
-        default: arm64
-        options:
-          - arm64
-          - arm32
       release-channel:
         description: "Release channel label appended to the GitHub release title"
         required: false
@@ -22,28 +15,21 @@ on:
 
 jobs:
   publish:
-    # 避免在 PR（尤其是 fork PR）時嘗試發 release，直接跳過
+    # 避免在 PR（尤其 fork PR）時嘗試發版
     if: github.event_name != 'pull_request'
-    name: Download and release Chromium APK
+    name: Download and release Chromium Desktop-Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Chromium snapshot
+      - name: Download Chromium snapshot (AndroidDesktop_arm64)
         id: snapshot
         run: |
           set -euo pipefail
 
-          ARCHITECTURE="${{ inputs.architecture || 'arm64' }}"
-          if [ "${ARCHITECTURE}" = "arm32" ]; then
-            PLATFORM="Android"
-            APK_VARIANT="arm32"
-          else
-            PLATFORM="Android_Arm64"
-            APK_VARIANT="arm64"
-          fi
+          PLATFORM="AndroidDesktop_arm64"
 
           LAST_CHANGE_URL="https://storage.googleapis.com/chromium-browser-snapshots/${PLATFORM}/LAST_CHANGE"
           echo "Fetching latest revision from ${LAST_CHANGE_URL}"
@@ -54,13 +40,13 @@ jobs:
             exit 1
           fi
 
-          ZIP_URL="https://storage.googleapis.com/chromium-browser-snapshots/${PLATFORM}/${REVISION}/chrome-android.zip"
+          ZIP_URL="https://storage.googleapis.com/chromium-browser-snapshots/${PLATFORM}/${REVISION}/chrome-android-desktop.zip"
           echo "Downloading ${ZIP_URL}"
-          curl -sSfL "${ZIP_URL}" -o chrome-android.zip
+          curl -sSfL "${ZIP_URL}" -o chrome-android-desktop.zip
 
-          APK_NAME="chromium-${REVISION}-${APK_VARIANT}.apk"
+          APK_NAME="chromium-${REVISION}-AndroidDesktop_arm64.apk"
           echo "Extracting ChromePublic.apk into ${APK_NAME}"
-          unzip -p chrome-android.zip chrome-android/apks/ChromePublic.apk > "${APK_NAME}"
+          unzip -p chrome-android-desktop.zip chrome-android-desktop/apks/ChromePublic.apk > "${APK_NAME}"
 
           if [ ! -s "${APK_NAME}" ]; then
             echo "Failed to extract Chromium APK" >&2
@@ -83,15 +69,39 @@ jobs:
           echo "SHA256: ${{ steps.snapshot.outputs.sha256 }}"
           echo "Source: ${{ steps.snapshot.outputs.zip_url }}"
 
-      - name: Create or update GitHub Release
+      - name: Check if release already exists (skip if same revision)
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: chromium-${{ steps.snapshot.outputs.revision }}-AndroidDesktop_arm64
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}") || true
+
+          if [ "${STATUS}" = "200" ]; then
+            echo "Release ${TAG} already exists. Skipping."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [ "${STATUS}" = "404" ]; then
+            echo "Release ${TAG} does not exist. Will create."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unexpected status ${STATUS} when checking release. Failing to be safe." >&2
+            exit 1
+          fi
+
+      - name: Create GitHub Release (only when new revision)
+        if: steps.check_release.outputs.exists == 'false'
         uses: ncipollo/release-action@v1
         with:
-          tag: chromium-${{ steps.snapshot.outputs.revision }}-${{ inputs.architecture || 'arm64' }}
-          name: Chromium ${{ inputs['release-channel'] || 'Snapshot' }} ${{ steps.snapshot.outputs.revision }} (${{ inputs.architecture || 'arm64' }})
+          tag: chromium-${{ steps.snapshot.outputs.revision }}-AndroidDesktop_arm64
+          name: Chromium ${{ inputs['release-channel'] || 'Snapshot' }} ${{ steps.snapshot.outputs.revision }} (AndroidDesktop_arm64)
           body: |
             * Revision: `${{ steps.snapshot.outputs.revision }}`
             * Platform directory: `${{ steps.snapshot.outputs.platform }}`
-            * Download source: [chrome-android.zip](${{ steps.snapshot.outputs.zip_url }})
+            * Download source: [chrome-android-desktop.zip](${{ steps.snapshot.outputs.zip_url }})
             * SHA256: `${{ steps.snapshot.outputs.sha256 }}`
           artifacts: ${{ steps.snapshot.outputs.apk_name }}
           artifactContentType: application/vnd.android.package-archive
@@ -99,3 +109,7 @@ jobs:
           replacesArtifacts: true
           prerelease: true
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip note (no new revision)
+        if: steps.check_release.outputs.exists == 'true'
+        run: echo "No new revision detected. Release step skipped."
