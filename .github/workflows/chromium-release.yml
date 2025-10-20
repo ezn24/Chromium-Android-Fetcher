@@ -1,6 +1,9 @@
 name: Publish Chromium Snapshot APK
 on:
-  workflow_dispatch:
+  schedule:
+    # 每天早上 6:00 UTC 執行（台灣時間下午 2 點）
+    - cron: "0 6 * * *"
+  workflow_dispatch: # 保留手動觸發功能
     inputs:
       architecture:
         description: "Chromium snapshot architecture to download"
@@ -28,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARCHITECTURE="${{ inputs.architecture }}"
+          ARCHITECTURE="${{ inputs.architecture || 'arm64' }}"
           if [ "${ARCHITECTURE}" = "arm32" ]; then
             PLATFORM="Android"
             APK_VARIANT="arm32"
@@ -78,8 +81,8 @@ jobs:
       - name: Create or update GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          tag: chromium-${{ steps.snapshot.outputs.revision }}-${{ inputs.architecture }}
-          name: Chromium ${{ inputs['release-channel'] || 'Snapshot' }} ${{ steps.snapshot.outputs.revision }} (${{ inputs.architecture }})
+          tag: chromium-${{ steps.snapshot.outputs.revision }}-${{ inputs.architecture || 'arm64' }}
+          name: Chromium ${{ inputs['release-channel'] || 'Snapshot' }} ${{ steps.snapshot.outputs.revision }} (${{ inputs.architecture || 'arm64' }})
           body: |
             * Revision: `${{ steps.snapshot.outputs.revision }}`
             * Platform directory: `${{ steps.snapshot.outputs.platform }}`
