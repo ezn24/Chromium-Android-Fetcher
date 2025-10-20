@@ -1,9 +1,12 @@
 name: Publish Chromium Snapshot APK
+
+permissions:
+  contents: write  # 這行是關鍵：允許建立/更新 release 與 tag
+
 on:
   schedule:
-    # 每天早上 6:00 UTC 執行（台灣時間下午 2 點）
-    - cron: "0 6 * * *"
-  workflow_dispatch: # 保留手動觸發功能
+    - cron: "0 6 * * *" # 每天 06:00 UTC
+  workflow_dispatch:
     inputs:
       architecture:
         description: "Chromium snapshot architecture to download"
@@ -19,6 +22,8 @@ on:
 
 jobs:
   publish:
+    # 避免在 PR（尤其是 fork PR）時嘗試發 release，直接跳過
+    if: github.event_name != 'pull_request'
     name: Download and release Chromium APK
     runs-on: ubuntu-latest
 
