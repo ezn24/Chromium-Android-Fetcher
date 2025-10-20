@@ -1,0 +1,93 @@
+name: Publish Chromium Snapshot APK
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Chromium snapshot architecture to download"
+        type: choice
+        default: arm64
+        options:
+          - arm64
+          - arm32
+      release-channel:
+        description: "Release channel label appended to the GitHub release title"
+        required: false
+        default: Snapshot
+
+jobs:
+  publish:
+    name: Download and release Chromium APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Chromium snapshot
+        id: snapshot
+        run: |
+          set -euo pipefail
+
+          ARCHITECTURE="${{ inputs.architecture }}"
+          if [ "${ARCHITECTURE}" = "arm32" ]; then
+            PLATFORM="Android"
+            APK_VARIANT="arm32"
+          else
+            PLATFORM="Android_Arm64"
+            APK_VARIANT="arm64"
+          fi
+
+          LAST_CHANGE_URL="https://storage.googleapis.com/chromium-browser-snapshots/${PLATFORM}/LAST_CHANGE"
+          echo "Fetching latest revision from ${LAST_CHANGE_URL}"
+          REVISION=$(curl -sSfL "${LAST_CHANGE_URL}")
+
+          if [ -z "${REVISION}" ]; then
+            echo "Failed to resolve the latest Chromium snapshot revision" >&2
+            exit 1
+          fi
+
+          ZIP_URL="https://storage.googleapis.com/chromium-browser-snapshots/${PLATFORM}/${REVISION}/chrome-android.zip"
+          echo "Downloading ${ZIP_URL}"
+          curl -sSfL "${ZIP_URL}" -o chrome-android.zip
+
+          APK_NAME="chromium-${REVISION}-${APK_VARIANT}.apk"
+          echo "Extracting ChromePublic.apk into ${APK_NAME}"
+          unzip -p chrome-android.zip chrome-android/apks/ChromePublic.apk > "${APK_NAME}"
+
+          if [ ! -s "${APK_NAME}" ]; then
+            echo "Failed to extract Chromium APK" >&2
+            exit 1
+          fi
+
+          SHA256=$(sha256sum "${APK_NAME}" | awk '{print $1}')
+
+          echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
+          echo "platform=${PLATFORM}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "zip_url=${ZIP_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize download
+        run: |
+          echo "Chromium revision: ${{ steps.snapshot.outputs.revision }}"
+          echo "Platform: ${{ steps.snapshot.outputs.platform }}"
+          echo "APK: ${{ steps.snapshot.outputs.apk_name }}"
+          echo "SHA256: ${{ steps.snapshot.outputs.sha256 }}"
+          echo "Source: ${{ steps.snapshot.outputs.zip_url }}"
+
+      - name: Create or update GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: chromium-${{ steps.snapshot.outputs.revision }}-${{ inputs.architecture }}
+          name: Chromium ${{ inputs['release-channel'] || 'Snapshot' }} ${{ steps.snapshot.outputs.revision }} (${{ inputs.architecture }})
+          body: |
+            * Revision: `${{ steps.snapshot.outputs.revision }}`
+            * Platform directory: `${{ steps.snapshot.outputs.platform }}`
+            * Download source: [chrome-android.zip](${{ steps.snapshot.outputs.zip_url }})
+            * SHA256: `${{ steps.snapshot.outputs.sha256 }}`
+          artifacts: ${{ steps.snapshot.outputs.apk_name }}
+          artifactContentType: application/vnd.android.package-archive
+          allowUpdates: true
+          replacesArtifacts: true
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
